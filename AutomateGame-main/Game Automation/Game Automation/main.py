@@ -1,130 +1,86 @@
 import cv2
 import mediapipe as mp
 import time
-from directkeys import right_pressed,left_pressed
-from directkeys import PressKey, ReleaseKey  
+from event_hand_check import click_and_hold_mouse_at_position
 
-from pynput import mouse, keyboard
-
-# Tạo đối tượng để điều khiển chuột
-mouse_controller = mouse.Controller()
-
-def click_and_hold_mouse_at_position(x, y, duration=1):
-    mouse_controller.position = (x, y)  # Di chuyển chuột đến vị trí (x, y)
-    mouse_controller.press(mouse.Button.left)  # Nhấn chuột trái tại vị trí đó
-    time.sleep(duration)  # Giữ chuột trong khoảng thời gian
-    mouse_controller.release(mouse.Button.left)
-# Hàm để click và giữ chuột trái
-def click_and_hold_mouse(duration=1):
-    mouse_controller.press(mouse.Button.left)  # Nhấn chuột trái
-    time.sleep(duration)  # Giữ chuột trong một khoảng thời gian
-    mouse_controller.release(mouse.Button.left)  # Thả chuột trái
-
-# Hàm để click chuột trái
-def click_mouse():
-    mouse_controller.click(mouse.Button.left)
-
-# Hàm này được gọi khi một phím được nhấn
-def on_press(key):
-    try:
-        # Kiểm tra nếu phím được nhấn là số
-        if key.char.isdigit():
-            click_mouse()
-            print(f"Clicked mouse because {key.char} was pressed")
-    except AttributeError:
-        pass
-
-# Hàm này được gọi khi một phím được thả ra (không sử dụng trong ví dụ này)
-def on_release(key):
-    pass
-def move_mouse_to_position(x, y):
-    mouse_controller.position = (x, y)  # Di chuyển chuột đến vị trí (x, y)
-    print(f"Chuột đã được di chuyển đến vị trí: {x}, {y}")
-
-break_key_pressed=left_pressed
-accelerato_key_pressed=right_pressed
-
+# Tạm dừng 2 giây để chuẩn bị cho việc khởi chạy camera
 time.sleep(2.0)
-current_key_pressed = set()
 
-mp_draw=mp.solutions.drawing_utils
-mp_hand=mp.solutions.hands
+# Khởi tạo các mô-đun của Mediapipe để vẽ và nhận diện tay
+mp_draw = mp.solutions.drawing_utils
+mp_hand = mp.solutions.hands
 
+# Danh sách các đầu ngón tay (tipIds) để theo dõi các ngón tay
+tipIds = [4, 8, 12, 16, 20]
 
-tipIds=[4,8,12,16,20]
+# Mở camera để thu video từ webcam
+video = cv2.VideoCapture(0)
 
-video=cv2.VideoCapture(0)
-
-with mp_hand.Hands(min_detection_confidence=0.5,
-               min_tracking_confidence=0.5) as hands:
+# Sử dụng mô-đun Mediapipe Hands với các thông số tin cậy tối thiểu
+with mp_hand.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
     while True:
+        # Đọc khung hình từ camera
+        ret, image = video.read()
         
-        keyPressed = False
-        break_pressed=False
-        accelerator_pressed=False
-        key_count=0
-        key_pressed=0
-        ret,image=video.read()
-        image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image.flags.writeable=False
-        results=hands.process(image)
-        image.flags.writeable=True
-        image=cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        lmList=[]
+        # Chuyển đổi khung hình từ BGR (mặc định của OpenCV) sang RGB (yêu cầu bởi Mediapipe)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False  # Tắt chế độ ghi để tăng tốc độ xử lý
+        results = hands.process(image)  # Xử lý khung hình để nhận diện bàn tay
+        image.flags.writeable = True  # Bật lại chế độ ghi
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)  # Chuyển đổi lại sang BGR để hiển thị với OpenCV
+
+        lmList = []  # Danh sách để lưu tọa độ các điểm mốc (landmarks) của bàn tay
         if results.multi_hand_landmarks:
             for hand_landmark in results.multi_hand_landmarks:
-                myHands=results.multi_hand_landmarks[0]
+                myHands = results.multi_hand_landmarks[0]
                 for id, lm in enumerate(myHands.landmark):
-                    h,w,c=image.shape
-                    cx,cy= int(lm.x*w), int(lm.y*h)
-                    lmList.append([id,cx,cy])
+                    # Tính toán tọa độ x, y dựa trên kích thước khung hình
+                    h, w, c = image.shape
+                    cx, cy = int(lm.x * w), int(lm.y * h)
+                    lmList.append([id, cx, cy])  # Lưu trữ ID và tọa độ của từng điểm mốc
+                # Vẽ các điểm mốc và kết nối chúng trên bàn tay
                 mp_draw.draw_landmarks(image, hand_landmark, mp_hand.HAND_CONNECTIONS)
-        fingers=[]
-        if len(lmList)!=0:
-            if lmList[tipIds[0]][1] > lmList[tipIds[0]-1][1]:
-                fingers.append(1)
+
+        if len(lmList) != 0:
+            fingers = []  # Danh sách để theo dõi trạng thái (mở hoặc đóng) của từng ngón tay
+
+            # Kiểm tra ngón cái (thumb)
+            if lmList[tipIds[0]][1] > lmList[tipIds[0] - 1][1]:  # Nếu ngón cái nằm bên phải của ngón trỏ (trên tay trái)
+                fingers.append(1)  # Ngón cái mở
             else:
-                fingers.append(0)
-            for id in range(1,5):
-                if lmList[tipIds[id]][2] < lmList[tipIds[id]-2][2]:
-                    fingers.append(1)
+                fingers.append(0)  # Ngón cái đóng
+
+            # Kiểm tra các ngón còn lại
+            for id in range(1, 5):
+                if lmList[tipIds[id]][2] < lmList[tipIds[id] - 2][2]:  # Nếu ngón tay đang mở (vị trí đầu ngón cao hơn khớp gần)
+                    fingers.append(1)  # Ngón tay mở
                 else:
-                    fingers.append(0)
-            total=fingers.count(1)
-            if total==0:
+                    fingers.append(0)  # Ngón tay đóng
+
+            # Đếm tổng số ngón tay đang mở
+            total = fingers.count(1)
+
+            # Nếu không có ngón tay nào mở, thực hiện thao tác phanh (brake)
+            if total == 0:
                 click_and_hold_mouse_at_position(815, 626, duration=0.3)
                 cv2.rectangle(image, (20, 300), (270, 425), (0, 255, 0), cv2.FILLED)
                 cv2.putText(image, "BRAKE", (45, 375), cv2.FONT_HERSHEY_SIMPLEX,
-                    2, (255, 0, 0), 5)
-                # PressKey(break_key_pressed)
-                break_pressed=True
-                current_key_pressed.add(break_key_pressed)
-                key_pressed=break_key_pressed
-                keyPressed = True
-                key_count=key_count+1
-            elif total==5:
-                #moi them dong nay
+                            2, (255, 0, 0), 5)
+
+            # Nếu tất cả các ngón tay đều mở, thực hiện thao tác ga (gas)
+            elif total == 5:
                 cv2.rectangle(image, (20, 300), (270, 425), (0, 255, 0), cv2.FILLED)
-                cv2.putText(image, " GAS", (45, 375), cv2.FONT_HERSHEY_SIMPLEX,
-                    2, (255, 0, 0), 5)
+                cv2.putText(image, "GAS", (45, 375), cv2.FONT_HERSHEY_SIMPLEX,
+                            2, (255, 0, 0), 5)
                 click_and_hold_mouse_at_position(1386, 629, 0.3)
-                # PressKey(accelerato_key_pressed)
-                key_pressed=accelerato_key_pressed
-                accelerator_pressed=True
-                keyPressed = True
-                current_key_pressed.add(accelerato_key_pressed)
-                key_count=key_count+1
-       
 
-
-            # if lmList[8][2] < lmList[6][2]:
-            #     print("Open")
-            # else:
-            #     print("Close")
-        cv2.imshow("Frame",image)
-        k=cv2.waitKey(1)
-        if k==ord('q'):
+        # Hiển thị khung hình đã xử lý trên màn hình
+        cv2.imshow("Frame", image)
+        
+        # Nếu nhấn phím 'q', thoát khỏi vòng lặp
+        if cv2.waitKey(1) == ord('q'):
             break
+
+# Giải phóng camera và đóng tất cả các cửa sổ
 video.release()
 cv2.destroyAllWindows()
-
